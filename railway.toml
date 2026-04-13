@@ -1,0 +1,8 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "npx tsx src/index.ts"
+restartPolicyType = "never"
+cronSchedule = "0 14 * * *"
