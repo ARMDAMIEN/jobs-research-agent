@@ -160,7 +160,7 @@ Follow the workflow in your system prompt exactly. Begin by calling get_existing
 
 Mode: ${DRY_RUN ? "DRY_RUN (no real emails will be sent)" : "LIVE (emails will be sent via Gmail)"}`;
 
-console.log(`\n🚀 jobs-research-agent | max_leads=${MAX_LEADS_PER_RUN} | max_size=${MAX_COMPANY_SIZE} | dry_run=${DRY_RUN}\n`);
+console.log(`\n🚀 jobs-research-agent BUILD-MARKER-ALPHA-2026-04-13 | max_leads=${MAX_LEADS_PER_RUN} | max_size=${MAX_COMPANY_SIZE} | dry_run=${DRY_RUN}\n`);
 
 async function main() {
   for await (const message of query({
