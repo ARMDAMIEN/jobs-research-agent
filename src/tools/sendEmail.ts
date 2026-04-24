@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import {
+  DRY_RUN,
   GMAIL_CLIENT_ID,
   GMAIL_CLIENT_SECRET,
   GMAIL_REFRESH_TOKEN,
@@ -55,6 +56,15 @@ export async function sendEmail(params: {
   const subject = renderEmailSubject(params.job_title);
   const body = renderEmailBody(params);
   const preview = `Subject: ${subject}\nTo: ${params.to}\n\n${body}`;
+
+  if (DRY_RUN) {
+    console.log(`\n──── DRY_RUN email preview ────\n${preview}\n───────────────────────────────\n`);
+    return {
+      message_id: `dryrun-${Date.now()}`,
+      sent_at: new Date().toISOString(),
+      preview,
+    };
+  }
 
   const raw = buildRawMime({ to: params.to, subject, body });
   const gmail = gmailClient();

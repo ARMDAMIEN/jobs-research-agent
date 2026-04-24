@@ -9,9 +9,10 @@ export function renderEmailBody(vars: {
   tasks: string;
 }): string {
   const first = vars.first_name?.trim() || "there";
+  const article = /^[aeiou]/i.test(vars.job_title) ? "an" : "a";
   return `Hi ${first},
 
-I saw ${vars.company_name} is hiring a ${vars.job_title}. I'm guessing you currently need help with ${vars.tasks}.
+I saw ${vars.company_name} is hiring ${article} ${vars.job_title}. I'm guessing you currently need help with ${vars.tasks}.
 
 I provide exactly that service for small teams, available right away, either as a stopgap while you hire or as an ongoing option if it clicks.
 

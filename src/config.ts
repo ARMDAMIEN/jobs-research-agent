@@ -19,6 +19,7 @@ export const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID ?? "";
 export const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? "claude-sonnet-4-5";
 export const MAX_COMPANY_SIZE = Number(process.env.MAX_COMPANY_SIZE ?? 20);
 export const MAX_LEADS_PER_RUN = Number(process.env.MAX_LEADS_PER_RUN ?? 5);
+export const DRY_RUN = (process.env.DRY_RUN ?? "").toLowerCase() === "true";
 
 export const DATA_DIR = new URL("../data/", import.meta.url).pathname;
 export const LEADS_JSON_PATH = `${DATA_DIR}leads.json`;
