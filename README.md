@@ -3,10 +3,10 @@
 Agentic lead-gen pipeline built on the Claude Agent SDK (same stack as `tiktok-research-agent`).
 
 **What it does**
-1. Queries SerpAPI (`engine=google_jobs`) for US companies hiring **Executive Assistant** / **Office Manager**
+1. Queries SerpAPI (`engine=google_jobs`) for US companies hiring **Executive Assistant**, **Office Manager**, **Chief of Staff**, **Operations Manager**, or **Personal Assistant**
 2. Enriches each company via Apollo.io and keeps only those with `employee_count <= MAX_COMPANY_SIZE` (default 20)
-3. Finds a founder/owner/CEO contact with a valid email via Apollo
-4. Sends a personalized cold email via the Gmail API
+3. Lists people at the company via Apollo and lets the agent pick the contact most likely to own the hire (COO / Head of Ops / Chief of Staff / Founder / CEO depending on context)
+4. Unlocks the picked contact's email and sends a personalized cold email via the Gmail API — the pitched task list is derived from the actual job description
 5. Saves every lead to `data/leads.json` and `data/leads.csv` for dedup across runs
 
 ## Setup
@@ -65,8 +65,29 @@ Re-running is idempotent — `get_existing_leads` dedupes against `data/leads.js
 
 ## Deploy
 
+Runs on Fly.io as a one-shot machine woken by a GitHub Actions cron.
+
+### One-time bootstrap
+
 ```bash
-railway up
+# Create the Fly app + canonical machine + persistent volume
+fly launch --no-deploy
+fly volumes create jra_data --size 1 --region cdg
+fly deploy --build-only --push --remote-only --image-label latest
+
+# Set runtime secrets on Fly
+fly secrets set \
+  ANTHROPIC_API_KEY=... \
+  SERPAPI_API_KEY=... \
+  APOLLO_API_KEY=... \
+  GMAIL_CLIENT_ID=... GMAIL_CLIENT_SECRET=... GMAIL_REFRESH_TOKEN=... \
+  GMAIL_SENDER=... GMAIL_SENDER_NAME='...' \
+  SENDER_FIRST_NAME='...' SENDER_TITLE='...' \
+  TELEGRAM_BOT_API_KEY=... TELEGRAM_CHAT_ID=...
 ```
 
-Schedule once per day via Railway cron or an external cron (GitHub Actions `workflow_dispatch` + schedule).
+Add `FLY_API_TOKEN` (from `fly auth token`) as a GitHub repo secret.
+
+### Scheduling
+
+Cron lives in [.github/workflows/jobs-research-agent.yml](.github/workflows/jobs-research-agent.yml): daily at 13:00 UTC (09:00 EDT / 06:00 PDT during DST). Pushes to `main` that touch `src/**`, `Dockerfile`, `fly.toml`, or `package*.json` rebuild and update the canonical machine in place. Manually trigger a one-off run via the Actions tab → `workflow_dispatch` → `mode=run`.

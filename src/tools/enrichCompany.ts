@@ -23,6 +23,9 @@ export async function enrichCompany(params: {
     page: 1,
     per_page: 5,
   };
+  if (params.location) {
+    body.organization_locations = [params.location];
+  }
 
   const res = await fetch("https://api.apollo.io/api/v1/organizations/search", {
     method: "POST",

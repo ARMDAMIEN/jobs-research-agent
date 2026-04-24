@@ -1,0 +1,104 @@
+name: Jobs Research Agent
+
+on:
+  schedule:
+    # Daily at 13:00 UTC — 09:00 EDT / 06:00 PDT during DST
+    # (08:00 EST / 05:00 PST during standard time). Morning arrival for US recipients.
+    - cron: "0 13 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "Dockerfile"
+      - "fly.toml"
+      - "tsconfig.json"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to do"
+        required: true
+        default: "run"
+        type: choice
+        options:
+          - run         # spawn a one-shot Fly machine (no rebuild)
+          - deploy      # rebuild + push image to Fly registry
+          - deploy-run  # rebuild then immediately run
+
+concurrency:
+  group: jobs-research-agent
+  cancel-in-progress: false
+
+env:
+  FLY_APP: jobs-research-agent
+  FLY_IMAGE: registry.fly.io/jobs-research-agent:latest
+
+jobs:
+  deploy:
+    name: Build & push image, update machine
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'deploy' || inputs.mode == 'deploy-run'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Build & push image
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        # `--image-label latest` overrides the default `deployment-{ts}` tag so
+        # the next step (and the README seed flow) can reference :latest.
+        run: flyctl deploy --build-only --push --remote-only --image-label latest --app "$FLY_APP"
+      - name: Update existing machine to new image
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          ID=$(flyctl machines list --app "$FLY_APP" --json | jq -r '[.[] | select(.config.mounts != null)][0].id')
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "::error::No volume-attached machine found on $FLY_APP. Run 'fly deploy' once locally to bootstrap."
+            exit 1
+          fi
+          echo "Updating machine $ID → $FLY_IMAGE"
+          # `--restart no` ensures Fly does not retry the CMD on failure (one-shot semantics).
+          flyctl machine update "$ID" --image "$FLY_IMAGE" --restart no --app "$FLY_APP" --yes
+
+  run:
+    name: Wake Fly machine for daily run
+    needs: [deploy]
+    # `always()` lets this job run even when `deploy` is skipped (cron / mode=run).
+    # We still want to bail if `deploy` actually failed.
+    if: |
+      always()
+      && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+      && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'run' || inputs.mode == 'deploy-run')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Start machine and wait for it to exit
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          ID=$(flyctl machines list --app "$FLY_APP" --json | jq -r '[.[] | select(.config.mounts != null)][0].id')
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "::error::No volume-attached machine found on $FLY_APP."
+            exit 1
+          fi
+          echo "Starting machine $ID"
+          flyctl machine start "$ID" --app "$FLY_APP"
+
+          # Poll until the machine exits (CMD finished). Cap at ~30 minutes.
+          # `fly machine status` has no --json flag; use `machines list --json` and filter.
+          for i in $(seq 1 120); do
+            STATE=$(flyctl machines list --app "$FLY_APP" --json \
+              | jq -r --arg id "$ID" '.[] | select(.id == $id) | .state')
+            echo "[$(date -u +%H:%M:%S)] machine state: ${STATE:-<unknown>}"
+            if [ "$STATE" = "stopped" ]; then
+              echo "Machine exited cleanly."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Machine still running after 30 min — check 'fly logs --app $FLY_APP'"
+          exit 1

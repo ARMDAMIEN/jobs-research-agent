@@ -1,13 +1,15 @@
 import "dotenv/config";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { CLAUDE_MODEL, DRY_RUN, MAX_COMPANY_SIZE, MAX_LEADS_PER_RUN } from "./config.js";
+import { CLAUDE_MODEL, MAX_COMPANY_SIZE, MAX_LEADS_PER_RUN } from "./config.js";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { searchJobs } from "./tools/searchJobs.js";
 import { enrichCompany } from "./tools/enrichCompany.js";
-import { findDecisionMaker } from "./tools/findDecisionMaker.js";
+import { listCompanyPeople } from "./tools/listCompanyPeople.js";
+import { unlockContactEmail } from "./tools/unlockContactEmail.js";
 import { sendEmail } from "./tools/sendEmail.js";
 import { saveLead, getExistingLeads, type LeadRecord } from "./tools/saveResults.js";
+import { sendTelegramReport } from "./tools/sendTelegramReport.js";
 
 // ─── Tool definitions ───────────────────────────────────────────────────────
 
@@ -51,20 +53,39 @@ const enrichCompanyTool = tool(
   { annotations: { readOnlyHint: true, openWorldHint: true } }
 );
 
-const findDecisionMakerTool = tool(
-  "find_decision_maker",
-  "Find a founder/owner/CEO contact for an Apollo organization. Returns first_name, email, email_status. Skip leads where email is null or email_status is 'locked'.",
+const listCompanyPeopleTool = tool(
+  "list_company_people",
+  "List up to 25 people at an Apollo organization (no email unlock). Returns id, first_name, last_name, title, seniority, has_email, linkedin_url for each. Use this to pick the contact most likely to be the hiring decision-maker for the role being filled, then call unlock_contact_email with their id.",
   {
     apollo_org_id: z.string(),
   },
   async (args) => {
-    console.log(`  👤 find_decision_maker: ${args.apollo_org_id}`);
+    console.log(`  👥 list_company_people: ${args.apollo_org_id}`);
     try {
-      const result = await findDecisionMaker(args);
+      const result = await listCompanyPeople(args);
+      console.log(`    → ${result.people.length} people`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `list_company_people failed: ${err}` }], isError: true };
+    }
+  },
+  { annotations: { readOnlyHint: true, openWorldHint: true } }
+);
+
+const unlockContactEmailTool = tool(
+  "unlock_contact_email",
+  "Unlock the email for a single Apollo person_id. Returns email + email_status. Skip this contact if email is null or email_status is 'locked'.",
+  {
+    person_id: z.string(),
+  },
+  async (args) => {
+    console.log(`  🔓 unlock_contact_email: ${args.person_id}`);
+    try {
+      const result = await unlockContactEmail(args);
       console.log(`    → ${result.first_name ?? "-"} ${result.last_name ?? ""} | ${result.title ?? "-"} | ${result.email_status}`);
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     } catch (err) {
-      return { content: [{ type: "text" as const, text: `find_decision_maker failed: ${err}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `unlock_contact_email failed: ${err}` }], isError: true };
     }
   },
   { annotations: { readOnlyHint: true, openWorldHint: true } }
@@ -72,15 +93,20 @@ const findDecisionMakerTool = tool(
 
 const sendEmailTool = tool(
   "send_email",
-  "Send the personalized cold email via Gmail API. Renders the template with first_name/company_name/job_title. Respects DRY_RUN.",
+  "Send the personalized cold email via Gmail API. The `tasks` string is spliced into the body as 'I'm guessing you currently need help with {tasks}.' — keep it natural, lowercase, 2-4 items joined with commas and a final 'and'.",
   {
     to: z.string().email(),
     first_name: z.string(),
     company_name: z.string(),
-    job_title: z.string().describe('"Executive Assistant" or "Office Manager"'),
+    job_title: z.string().describe('One of "Executive Assistant", "Office Manager", "Chief of Staff", "Operations Manager", "Personal Assistant"'),
+    tasks: z.string().describe(
+      "Comma-separated list of 2-4 services to pitch, derived from the job description. " +
+      "Example: 'lead generation, CRM updates, and outbound follow-ups'. " +
+      "Lowercase, no trailing period, no em-dashes."
+    ),
   },
   async (args) => {
-    console.log(`  ✉️  send_email → ${args.to} (${args.company_name})${DRY_RUN ? " [DRY_RUN]" : ""}`);
+    console.log(`  ✉️  send_email → ${args.to} (${args.company_name})`);
     try {
       const result = await sendEmail(args);
       console.log(`    → message_id=${result.message_id}`);
@@ -121,6 +147,43 @@ const saveLeadTool = tool(
   { annotations: { destructiveHint: false } }
 );
 
+const sendTelegramReportTool = tool(
+  "send_telegram_report",
+  "Send the final run summary to Telegram. Call this as the VERY LAST step, after all send_email and save_lead calls, with the complete tally and lead list.",
+  {
+    sent: z.number().int().nonnegative(),
+    skipped_size: z.number().int().nonnegative(),
+    skipped_no_contact: z.number().int().nonnegative(),
+    skipped_dupe: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    leads: z.array(
+      z.object({
+        company: z.string(),
+        employee_count: z.number().nullable(),
+        industry: z.string().nullable(),
+        contact_name: z.string(),
+        contact_title: z.string(),
+        email: z.string(),
+        status: z.enum(["sent", "failed"]),
+      })
+    ),
+    notes: z.string().optional(),
+  },
+  async (args) => {
+    console.log(`  📡 send_telegram_report: ${args.sent} sent, ${args.failed} failed`);
+    try {
+      const result = await sendTelegramReport(args);
+      if (!result.ok) {
+        return { content: [{ type: "text" as const, text: `Telegram failed: ${result.error}` }], isError: true };
+      }
+      return { content: [{ type: "text" as const, text: `Telegram sent (message_id=${result.message_id})` }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Telegram error: ${err}` }], isError: true };
+    }
+  },
+  { annotations: { destructiveHint: false, openWorldHint: true } }
+);
+
 const getExistingLeadsTool = tool(
   "get_existing_leads",
   "Return the list of companies and emails already contacted in previous runs. Use this to dedupe before sending.",
@@ -145,22 +208,24 @@ const mcpServer = createSdkMcpServer({
   tools: [
     searchJobsTool,
     enrichCompanyTool,
-    findDecisionMakerTool,
+    listCompanyPeopleTool,
+    unlockContactEmailTool,
     sendEmailTool,
     saveLeadTool,
     getExistingLeadsTool,
+    sendTelegramReportTool,
   ],
 });
 
 // ─── Task prompt ────────────────────────────────────────────────────────────
 
-const taskPrompt = `Find up to ${MAX_LEADS_PER_RUN} US companies currently hiring an Executive Assistant or Office Manager, each with <= ${MAX_COMPANY_SIZE} employees, and send the personalized cold email to a founder/owner/CEO at each.
+const taskPrompt = `Find up to ${MAX_LEADS_PER_RUN} US companies currently hiring an Executive Assistant, Office Manager, Chief of Staff, Operations Manager, or Personal Assistant, each with <= ${MAX_COMPANY_SIZE} employees. For each, pick the contact most likely to hire this role and send a personalized cold email that references tasks pulled directly from the job description.
 
 Follow the workflow in your system prompt exactly. Begin by calling get_existing_leads.
 
-Mode: ${DRY_RUN ? "DRY_RUN (no real emails will be sent)" : "LIVE (emails will be sent via Gmail)"}`;
+Mode: LIVE (emails will be sent via Gmail)`;
 
-console.log(`\n🚀 jobs-research-agent BUILD-MARKER-ALPHA-2026-04-13 | max_leads=${MAX_LEADS_PER_RUN} | max_size=${MAX_COMPANY_SIZE} | dry_run=${DRY_RUN}\n`);
+console.log(`\n🚀 jobs-research-agent | max_leads=${MAX_LEADS_PER_RUN} | max_size=${MAX_COMPANY_SIZE}\n`);
 
 async function main() {
   for await (const message of query({
@@ -172,8 +237,10 @@ async function main() {
       tools: [],
       allowedTools: ["mcp__jobs_research__*"],
       permissionMode: "bypassPermissions",
-      maxTurns: 80,
-    },
+      maxTurns: 150,
+      sandbox: { enabled: false, failIfUnavailable: false },
+      stderr: (data: string) => process.stderr.write(`[cli-stderr] ${data}`),
+    } as any,
   })) {
     if (message.type === "assistant" && message.message?.content) {
       for (const block of message.message.content) {

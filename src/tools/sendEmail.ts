@@ -1,6 +1,5 @@
 import { google } from "googleapis";
 import {
-  DRY_RUN,
   GMAIL_CLIENT_ID,
   GMAIL_CLIENT_SECRET,
   GMAIL_REFRESH_TOKEN,
@@ -45,25 +44,17 @@ export async function sendEmail(params: {
   first_name: string;
   company_name: string;
   job_title: string;
-}): Promise<{ message_id: string; sent_at: string; dry_run: boolean; preview: string }> {
+  tasks: string;
+}): Promise<{ message_id: string; sent_at: string; preview: string }> {
+  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN || !GMAIL_SENDER) {
+    throw new Error(
+      "Gmail not configured: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_SENDER"
+    );
+  }
+
   const subject = renderEmailSubject(params.job_title);
   const body = renderEmailBody(params);
   const preview = `Subject: ${subject}\nTo: ${params.to}\n\n${body}`;
-
-  if (DRY_RUN) {
-    return {
-      message_id: "dry-run",
-      sent_at: new Date().toISOString(),
-      dry_run: true,
-      preview,
-    };
-  }
-
-  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN || !GMAIL_SENDER) {
-    throw new Error(
-      "Gmail not configured: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_SENDER (or enable DRY_RUN)"
-    );
-  }
 
   const raw = buildRawMime({ to: params.to, subject, body });
   const gmail = gmailClient();
@@ -75,7 +66,6 @@ export async function sendEmail(params: {
   return {
     message_id: res.data.id ?? "",
     sent_at: new Date().toISOString(),
-    dry_run: false,
     preview,
   };
 }
