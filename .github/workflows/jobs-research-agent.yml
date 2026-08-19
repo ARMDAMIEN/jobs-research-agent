@@ -1,11 +1,15 @@
 name: Jobs Research Agent
 
 on:
-  schedule:
-    # Weekly on Tuesday at 13:00 UTC — 09:00 EDT / 06:00 PDT during DST
-    # (08:00 EST / 05:00 PST during standard time). Tue morning is the
-    # conventional sweet spot for US cold-email open rates.
-    - cron: "0 13 * * 2"
+  # PAUSED 2026-08-19 - migrating this agent to a Claude Code routine
+  # (subscription-based) instead of the metered Anthropic API. The deploy path
+  # below is intact: use `workflow_dispatch` for a manual deploy/run, and
+  # re-enable the weekly cron by uncommenting the `schedule:` block.
+  # schedule:
+  #   # Weekly on Tuesday at 13:00 UTC — 09:00 EDT / 06:00 PDT during DST
+  #   # (08:00 EST / 05:00 PST during standard time). Tue morning is the
+  #   # conventional sweet spot for US cold-email open rates.
+  #   - cron: "0 13 * * 2"
   push:
     branches: [main]
     paths:
